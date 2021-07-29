@@ -42,7 +42,8 @@ def train_step(inp, tar):
     tar_inp = tar[:, :-1]
     tar_real = tar[:, 1:]
 
-    enc_padding_mask, combined_mask, dec_padding_mask = create_masks(inp, tar_inp)
+    enc_padding_mask, combined_mask, dec_padding_mask = create_masks(inp,
+                                                                     tar_inp)
 
     with tf.GradientTape() as tape:
         predictions, _ = transformer(
@@ -115,26 +116,36 @@ if __name__ == '__main__':
     summaries = news['abstracts']
     summaries = summaries.apply(lambda x: '<go> ' + x + ' <stop>')
 
-    print("### Tokenizing the texts into integer tokens..."); sys.stdout.flush();
+    print("### Tokenizing the texts into integer tokens...", file=sys.stderr)
     if opt.encoder_max_vocab != -1:
-        document_tokenizer = tf.keras.preprocessing.text.Tokenizer(num_words=opt.encoder_max_vocab, filters=filters, oov_token=oov_token)
+        document_tokenizer = tf.keras.preprocessing.text.Tokenizer(
+          num_words=opt.encoder_max_vocab, filters=filters,
+          oov_token=oov_token)
     else:
-        document_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=filters, oov_token=oov_token)
+        document_tokenizer = tf.keras.preprocessing.text.Tokenizer(
+          filters=filters, oov_token=oov_token)
 
     if opt.decoder_max_vocab != -1:
-        summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(num_words=opt.decoder_max_vocab, filters=filters, oov_token=oov_token)
+        summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(
+          num_words=opt.decoder_max_vocab, filters=filters,
+          oov_token=oov_token)
     else:
-        summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=filters, oov_token=oov_token)
+        summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(
+          filters=filters, oov_token=oov_token)
 
     document_tokenizer.fit_on_texts(documents)
     summary_tokenizer.fit_on_texts(summaries)
 
-    with open(os.path.join(opt.vocab_save_dir) + 'document_tokenizer_{}.pickle'.format(
-            opt.encoder_max_vocab), 'wb') as fp:
+    with open(
+      os.path.join(opt.vocab_save_dir,
+                   f'document_tokenizer_{opt.encoder_max_vocab}.pickle'),
+      'wb') as fp:
         pickle.dump(document_tokenizer, fp)
 
-    with open(os.path.join(opt.vocab_save_dir) + 'summary_tokenizer_{}.pickle'.format(
-            opt.decoder_max_vocab), 'wb') as fp:
+    with open(
+      os.path.join(opt.vocab_save_dir,
+                   f'summary_tokenizer_{opt.decoder_max_vocab}.pickle'),
+      'wb') as fp:
         pickle.dump(summary_tokenizer, fp)
 
     inputs = document_tokenizer.texts_to_sequences(documents)
@@ -150,72 +161,84 @@ if __name__ == '__main__':
     else:
         decoder_vocab_size = len(summary_tokenizer.word_index) + 1
 
-    print("### Obtaining insights on lengths for defining maxlen..."); sys.stdout.flush();
+    print("### Obtaining insights on lengths for defining maxlen...",
+          file=sys.stderr)
     document_lengths = pd.Series([len(x) for x in documents])
     summary_lengths = pd.Series([len(x) for x in summaries])
     BUFFER_SIZE = int(document_lengths.count())
 
-    print("### Padding/Truncating sequences for identical sequence lengths..."); sys.stdout.flush();
-    inputs = tf.keras.preprocessing.sequence.pad_sequences(inputs, maxlen=opt.encoder_max_len, padding='post',
-                                                           truncating='post')
-    targets = tf.keras.preprocessing.sequence.pad_sequences(targets, maxlen=opt.decoder_max_len, padding='post',
-                                                            truncating='post')
+    print("### Padding/Truncating sequences for identical sequence lengths...",
+          file=sys.stderr)
+    inputs = tf.keras.preprocessing.sequence.pad_sequences(
+      inputs, maxlen=opt.encoder_max_len, padding='post', truncating='post')
+    targets = tf.keras.preprocessing.sequence.pad_sequences(
+      targets, maxlen=opt.decoder_max_len, padding='post', truncating='post')
 
-    print("### Creating dataset pipeline..."); sys.stdout.flush();
+    print("### Creating dataset pipeline...", file=sys.stderr)
     inputs = tf.cast(inputs, dtype=tf.int32)
     targets = tf.cast(targets, dtype=tf.int32)
 
-    dataset_train = tf.data.Dataset.from_tensor_slices((inputs, targets)).shuffle(BUFFER_SIZE).batch(opt.batch_size)
+    dataset_train = tf.data.Dataset.from_tensor_slices(
+      (inputs, targets)).shuffle(BUFFER_SIZE).batch(opt.batch_size)
 
     with strategy.scope():
-        print("### Creating model..."); sys.stdout.flush();
+        print("### Creating model...", file=sys.stderr)
         transformer = create_model()
-        print('### Defining losses and other metrics...'); sys.stdout.flush();
+        print('### Defining losses and other metrics...', file=sys.stderr)
         learning_rate = CustomSchedule(opt.d_model)
-        optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
-        loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+        optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9,
+                                             beta_2=0.98, epsilon=1e-9)
+        loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
+          from_logits=True, reduction='none')
 
     with strategy.scope():
         train_loss = tf.keras.metrics.Mean(name='train_loss')
 
-    print("### Setting checkpoints manager..."); sys.stdout.flush();
+    print("### Setting checkpoints manager...", file=sys.stderr)
     ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
-    ckpt_manager = tf.train.CheckpointManager(ckpt, opt.checkpoint_path, max_to_keep=5)
+    ckpt_manager = tf.train.CheckpointManager(ckpt, opt.checkpoint_path,
+                                              max_to_keep=5)
 
     with strategy.scope():
-        train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+        train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(
+          name='train_accuracy')
 
-    print("### Training ..."); sys.stdout.flush();
+    print("### Training ...", file=sys.stderr)
     with strategy.scope():
 
         for epoch in range(opt.epochs):
             # start_time = time.time()
             total_loss = 0.0
-            num_batches = 0
+            num_batches = len(dataset_train)
             train_accuracy.reset_states()
 
-            for (batch, (inp, tar)) in enumerate(dataset_train):
+            for batch, (inp, tar) in enumerate(dataset_train):
 
                 total_loss += distributed_train_step(inp, tar)
-                num_batches += 1
 
                 if batch % 2 == 0:
-                    print('Epoch {} Batch {}'.format(epoch + 1, batch + 1)); sys.stdout.flush();
+                    print(f'Epoch {epoch + 1}/{opt.epochs} "
+                          f"Batch {batch + 1}/{num_batches}',
+                          file=sys.stderr)
 
             train_loss = total_loss / num_batches
 
-            template = "Epoch {}, Loss: {}, Accuracy: {}"
-            print(template.format(epoch + 1, train_loss, train_accuracy.result()*100)); sys.stdout.flush();
+            print(f"Epoch {epoch + 1}, Loss: {train_loss}, "
+                  f"Accuracy: {train_accuracy.result()*100}",
+                  file=sys.stderr)
             end_time = time.time()
-            # print("Time: ", str(end_time - start_time))
+            print(f"Time: {end_time - start_time}", file=sys.stderr)
 
-            print('### Save the checkpoints ...')
+            print('### Save the checkpoints ...', file=sys.stderr)
             if (epoch + 1) % 1 == 0:
                 path_save_ckp = opt.checkpoint_path + 'epoch_' + str(epoch + 1)
 
                 if not os.path.isdir(path_save_ckp):
                     os.makedirs(path_save_ckp)
-                    ckpt_manager = tf.train.CheckpointManager(ckpt, path_save_ckp, max_to_keep=5)
+                    ckpt_manager = tf.train.CheckpointManager(ckpt,
+                                                              path_save_ckp,
+                                                              max_to_keep=5)
                     ckpt_save_path = ckpt_manager.save()
-                    print('Saving checkpoint for epoch {} at {}'.format(epoch + 1, ckpt_save_path));
-                    sys.stdout.flush();
+                    print(f'Saving checkpoint for epoch {epoch + 1} '
+                          f'at {ckpt_save_path}',
+                          file=sys.stderr)
