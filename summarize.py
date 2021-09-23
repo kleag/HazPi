@@ -45,9 +45,10 @@ def create_model():
 
 
 def read_articles_summarize(input_document, document_tokenizer, opt):
-    with tf.device('/GPU:0'):
-        input_document = document_tokenizer.texts_to_sequences([input_document])
-        input_document = tf.keras.preprocessing.sequence.pad_sequences(input_document, maxlen=opt.encoder_max_len,
+    print("read_articles_summarize", file=sys.stderr)
+    #with tf.device('/GPU:0'):
+    input_document = document_tokenizer.texts_to_sequences([input_document])
+    input_document = tf.keras.preprocessing.sequence.pad_sequences(input_document, maxlen=opt.encoder_max_len,
                                                                        padding='post', truncating='post')
 
     encoder_input = tf.expand_dims(input_document[0], axis=0)
@@ -55,6 +56,7 @@ def read_articles_summarize(input_document, document_tokenizer, opt):
 
 
 def initialization_vars(encoder_input, summary_tokenizer, transformer, opt):
+    print("initialization_vars", file=sys.stderr)
     decoder_input = [summary_tokenizer.word_index["<go>"]]
     outputs = tf.expand_dims(decoder_input, 0)
     enc_padding_mask, combined_mask, dec_padding_mask = create_masks(encoder_input, outputs)
@@ -62,8 +64,8 @@ def initialization_vars(encoder_input, summary_tokenizer, transformer, opt):
                                                  combined_mask, dec_padding_mask)
     predictions = predictions[:, -1:, :]
     predictions = tf.keras.activations.softmax(predictions, axis=-1)
-    with tf.device('/GPU:0'):
-        probs, ind = tf.math.top_k(predictions, opt.k, sorted=True)
+    #with tf.device('/GPU:0'):
+    probs, ind = tf.math.top_k(predictions, opt.k, sorted=True)
     log_scores = tf.cast([math.log(prob) for prob in probs.numpy().flatten()], dtype=tf.float32)
     log_scores = tf.expand_dims(log_scores, axis=0)
     outputs = np.zeros((opt.k, opt.len_summary))
@@ -79,10 +81,10 @@ def k_best_ouputs(outputs, probs_matrix_np, ind_matrix_np, log_scores, i, opt):
 
     log_probs = np.array([math.log(prob) for prob in probs_matrix_np.flatten()]).reshape(opt.k, opt.k) + \
                  tf.keras.backend.transpose(log_scores).numpy()
-    with tf.device('/GPU:0'):
-        log_probs = tf.expand_dims(tf.cast(log_probs.flatten(), dtype=tf.float32), axis=0)
-    with tf.device('/GPU:0'):
-        probs, ind = tf.math.top_k(log_probs, opt.k, sorted=True)
+    #with tf.device('/GPU:0'):
+    log_probs = tf.expand_dims(tf.cast(log_probs.flatten(), dtype=tf.float32), axis=0)
+    #with tf.device('/GPU:0'):
+    probs, ind = tf.math.top_k(log_probs, opt.k, sorted=True)
 
     row = ind // opt.k
     col = ind % opt.k
@@ -98,12 +100,12 @@ def k_best_ouputs(outputs, probs_matrix_np, ind_matrix_np, log_scores, i, opt):
 
 
 def summarize(input_document, summary_tokenizer, document_tokenizer, transformer, opt):
+    print("summarize", file=sys.stderr)
     stop_token = [summary_tokenizer.word_index["<stop>"]]
     stop_token = tf.expand_dims(stop_token, 0)
-
-    with tf.device('/GPU:0'):
-        encoder_input = read_articles_summarize(input_document, document_tokenizer, opt)
-        outputs, log_scores = initialization_vars(encoder_input, summary_tokenizer, transformer, opt)
+    #with tf.device('/GPU:0'):
+    encoder_input = read_articles_summarize(input_document, document_tokenizer, opt)
+    outputs, log_scores = initialization_vars(encoder_input, summary_tokenizer, transformer, opt)
     ind = None
 
     # Initialization of dic_ngrams
@@ -120,10 +122,13 @@ def summarize(input_document, summary_tokenizer, document_tokenizer, transformer
 
             enc_padding_mask, combined_mask, dec_padding_mask = create_masks(encoder_input, outputs[j:j+1, :i])
 
+            print(f"summarize call transformer {i}/{opt.len_summary}, "
+                  f"{j+1}/{opt.k}", file=sys.stderr, end="\r")
             predictions, attention_weights = transformer(encoder_input, outputs[j:j+1,:i], False, enc_padding_mask,
                                                          combined_mask, dec_padding_mask)
 
             predictions = predictions[:, -1:, :]
+            #print("summarize call softmax", file=sys.stderr)
             predictions = tf.keras.activations.softmax(predictions, axis=-1)
 
             if opt.ngram_size > 1:
@@ -156,6 +161,7 @@ def summarize(input_document, summary_tokenizer, document_tokenizer, transformer
             probs_matrix_np[j,:] = probs
             ind_matrix_np[j, :] = ind_
 
+        #print("summarize k_best_ouputs", file=sys.stderr)
         outputs, log_scores = k_best_ouputs(outputs, probs_matrix_np, ind_matrix_np, log_scores, i, opt)
 
         ones = tf.where((outputs == stop_token))
@@ -274,8 +280,8 @@ if __name__ == '__main__':
 
             documents = [text]
 
-            with tf.device('/GPU:0'):
-                inputs = document_tokenizer.texts_to_sequences(documents)
+            #with tf.device('/GPU:0'):
+            inputs = document_tokenizer.texts_to_sequences(documents)
 
             if opt.encoder_max_vocab != -1:
                 encoder_vocab_size = opt.encoder_max_vocab
@@ -290,9 +296,9 @@ if __name__ == '__main__':
             print("### Obtaining insights on lengths for defining maxlen..."); sys.stdout.flush()
 
             print("### Padding/Truncating sequences for identical sequence lengths..."); sys.stdout.flush()
-            with tf.device('/GPU:0'):
-                inputs = tf.keras.preprocessing.sequence.pad_sequences(inputs, maxlen=opt.encoder_max_len, padding='post',
-                                                                    truncating='post')
+            #with tf.device('/GPU:0'):
+            inputs = tf.keras.preprocessing.sequence.pad_sequences(inputs, maxlen=opt.encoder_max_len, padding='post',
+                                                                truncating='post')
 
             # To know how many <unk> we have in the input and target sequences.
             cnt_unk_inputs = 0
@@ -309,8 +315,8 @@ if __name__ == '__main__':
             loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
             print("### Creating model..."); sys.stdout.flush()
-            with tf.device('/GPU:0'):
-                transformer = create_model()
+            #with tf.device('/GPU:0'):
+            transformer = create_model()
 
             print("### Setting checkpoints manager..."); sys.stdout.flush()
             ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
@@ -320,7 +326,6 @@ if __name__ == '__main__':
                 ckpt.restore(ckpt_manager.latest_checkpoint).expect_partial()
                 print('Latest checkpoint restored!!'); sys.stdout.flush()
 
-            print("### Summarizing..."); sys.stdout.flush()
             documents_pass = list(documents)
 
             if not os.path.exists(opt.path_summaries_decoded):
@@ -334,6 +339,7 @@ if __name__ == '__main__':
 
             ind_sum = 1
 
+            print("### Summarizing...", flush = True);
             for idx, doc in enumerate(documents_pass):
                 #try:
                 start_time = time.time()
